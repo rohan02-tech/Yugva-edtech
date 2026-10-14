@@ -118,4 +118,6 @@ function saveM(e,id){const f=fd(e),m=db.mentors.find(x=>x.id==id);m.name=f.name;
 const delM=id=>{db.mentors=db.mentors.filter(m=>m.id!=id);ok()};
 function addF(e){const f=fd(e);if(db.users.some(u=>u.email==f.email))return toast('Email already used'),false;db.users.push({...f,enr:{}});return ok()}
 const setR=(e,r)=>{if(e==me)return;db.users.find(u=>u.email==e).role=r;ok()};
-addEventListener('hashchange',route);route();
+async function loadApi(){try{const[c,m]=await Promise.all([fetch('/api/courses').then(r=>r.json()),fetch('/api/mentors').then(r=>r.json())]);if(!Array.isArray(c)||!c.length)return;
+ db.mentors=m.map(x=>({id:'m'+x.id,name:x.name,info:x.info,img:x.image}));db.courses=c.map(x=>({slug:x.slug,name:x.name,cat:x.category||'Tech',price:x.price,months:x.months,icon:'school',img:x.image,status:'published',desc:x.description,syl:x.syllabus,skills:x.skills,outs:x.outcomes,mentors:x.mentorIds.map(i=>'m'+i),videos:[]}))}catch{}}
+addEventListener('hashchange',route);loadApi().then(route);

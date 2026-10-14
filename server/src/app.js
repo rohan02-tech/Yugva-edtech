@@ -4,7 +4,7 @@ function createApp(db,cfg){
  const app=express(),now=()=>Date.now(),ttl=cfg.sessionMinutes*60000,tries=new Map();
  const audit=(u,a,t)=>db.prepare('INSERT INTO audit_log(actor_id,action,target,at) VALUES(?,?,?,?)').run(u?u.id:null,a,t||'',now());
  const cookie=(v,age)=>`sid=${v}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${age}${cfg.secure?'; Secure':''}`;
- app.disable('x-powered-by');app.use(express.json({limit:'100kb'}));
+ app.disable('x-powered-by');app.use(express.json({limit:'1mb'}));
  app.use((q,r,n)=>{r.set({'X-Content-Type-Options':'nosniff','X-Frame-Options':'DENY'});if(q.path.startsWith('/api'))r.set('Cache-Control','no-store');n()});
  app.use((req,res,next)=>{const m=/(?:^|;\s*)sid=([a-f0-9]+)/.exec(req.headers.cookie||'');
   if(m){const s=db.prepare('SELECT s.id sid,s.expires_at,u.id uid,u.name,u.email,u.role,u.active FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=?').get(th(m[1]));
@@ -46,6 +46,7 @@ function createApp(db,cfg){
   const r=db.prepare("UPDATE users SET role=? WHERE id=? AND role!='student'").run(role,id);if(!r.changes)return res.status(404).json({error:'Staff member not found'});
   db.prepare('DELETE FROM sessions WHERE user_id=?').run(id);audit(req.user,'role_changed',id+':'+role);res.json({ok:true})});
 
+ require('./content')(app,{db,area,need,audit,hash,EMAIL});
  app.use('/api',deny(404,'Not found'));
  app.use('/server',deny(404,'Not found'));
  app.use(express.static(path.join(__dirname,'..','..')));
