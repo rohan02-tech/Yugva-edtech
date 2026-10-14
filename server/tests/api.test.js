@@ -1,0 +1,25 @@
+const{test,before,after}=require('node:test'),assert=require('node:assert');
+const{openDb}=require('../src/db'),{createApp}=require('../src/app'),{hash}=require('../src/security');
+let srv,base,db;const PW='Passw0rd!';
+before(()=>{db=openDb(':memory:');for(const r of['superadmin','counsellor','instructor','student'])db.prepare('INSERT INTO users(name,email,pw_hash,role) VALUES(?,?,?,?)').run(r,r+'@t.in',hash(PW),r);
+ srv=createApp(db,{dev:true,secure:false,sessionMinutes:30}).listen(0);base='http://localhost:'+srv.address().port});
+after(()=>srv.close());
+async function call(m,p,body,ck){const r=await fetch(base+p,{method:m,headers:{'content-type':'application/json',...(ck?{cookie:ck}:{})},body:body&&JSON.stringify(body)});return{s:r.status,j:await r.json().catch(()=>({})),ck:(r.headers.get('set-cookie')||'').split(';')[0]}}
+const login=(r,portal,pw=PW)=>call('POST','/api/auth/login',{email:r+'@t.in',password:pw,portal});
+test('unauthenticated users are blocked',async()=>{for(const p of['/api/admin/staff','/api/student/me','/api/instructor/me','/api/auth/me'])assert.equal((await call('GET',p)).s,401,p)});
+test('wrong password and wrong portal are rejected',async()=>{assert.equal((await login('superadmin','admin','bad')).s,401);assert.equal((await login('student','admin')).s,401);assert.equal((await login('instructor','admin')).s,401)});
+test('student cannot reach admin or instructor areas',async()=>{const l=await login('student','student');assert.equal(l.s,200);for(const p of['/api/admin/staff','/api/admin/me','/api/instructor/me'])assert.equal((await call('GET',p,null,l.ck)).s,403,p);assert.equal((await call('GET','/api/student/me',null,l.ck)).s,200)});
+test('instructor has own area only',async()=>{const l=await login('instructor','instructor');assert.equal((await call('GET','/api/instructor/me',null,l.ck)).s,200);assert.equal((await call('GET','/api/admin/staff',null,l.ck)).s,403)});
+test('counsellor cannot manage staff',async()=>{const l=await login('counsellor','admin');assert.equal((await call('GET','/api/admin/me',null,l.ck)).s,200);assert.equal((await call('GET','/api/admin/staff',null,l.ck)).s,403);assert.equal((await call('POST','/api/admin/staff',{name:'x',email:'x@t.in',password:PW,role:'finance'},l.ck)).s,403)});
+test('super admin manages staff but not own role',async()=>{const ck=(await login('superadmin','admin')).ck;
+ assert.equal((await call('POST','/api/admin/staff',{name:'A',email:'bad',password:PW,role:'finance'},ck)).s,400);
+ const c=await call('POST','/api/admin/staff',{name:'Fin',email:'fin@t.in',password:PW,role:'finance'},ck);assert.equal(c.s,201);
+ assert.equal((await call('POST','/api/admin/staff',{name:'Fin',email:'fin@t.in',password:PW,role:'finance'},ck)).s,409);
+ const me=db.prepare("SELECT id FROM users WHERE role='superadmin'").get().id;assert.equal((await call('PATCH',`/api/admin/staff/${me}/role`,{role:'finance'},ck)).s,403);
+ assert.equal((await call('PATCH',`/api/admin/staff/${c.j.id}/role`,{role:'academic'},ck)).s,200)});
+test('session expiry and logout',async()=>{const l=await login('student','student');db.prepare('UPDATE sessions SET expires_at=1').run();assert.equal((await call('GET','/api/auth/me',null,l.ck)).s,401);
+ const l2=await login('student','student');await call('POST','/api/auth/logout',null,l2.ck);assert.equal((await call('GET','/api/auth/me',null,l2.ck)).s,401)});
+test('password reset flow',async()=>{const f=await call('POST','/api/auth/forgot',{email:'student@t.in'});assert.ok(f.j.devToken);assert.equal((await call('POST','/api/auth/reset',{token:f.j.devToken,password:'short'})).s,400);
+ assert.equal((await call('POST','/api/auth/reset',{token:f.j.devToken,password:'NewPassw0rd!'})).s,200);assert.equal((await call('POST','/api/auth/reset',{token:f.j.devToken,password:'NewPassw0rd!'})).s,400);
+ assert.equal((await login('student','student')).s,401);assert.equal((await login('student','student','NewPassw0rd!')).s,200)});
+test('server folder is not publicly served',async()=>{assert.equal((await call('GET','/server/.env')).s,404)});
